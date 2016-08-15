@@ -30,18 +30,27 @@ public class FetchRequestHandler implements RequestHandler {
 		List<Topic> topics = (List<Topic>) DataUtils.deserialize(request.getBody());
 		if(topics != null){
 			for(Topic topic:topics){
+				int readCounter = 0;
 				byte[] tpc = null;
-				TopicQueue queue = TopicQueuePool.getQueue(topic.getTopic());
-				if(null != queue){
-					tpc = queue.poll();
-				}else{
-					BackupQueue backupQueue = BackupQueuePool.getBackupQueueFromPool(topic.getTopic());
-					if(null != backupQueue){
-						tpc = backupQueue.poll();
+				boolean backupQueueOver = false;
+				BackupQueue backupQueue = BackupQueuePool.getBackupQueueFromPool(topic.getTopic());
+				if(null != backupQueue){
+					tpc = backupQueue.poll();
+					readCounter = backupQueue.getReadIndex().getReadCounter();
+					if(tpc == null && readCounter == backupQueue.getWriteIndex().getWriteCounter()){
+						backupQueueOver = true;
+					}
+				}
+				if(backupQueue == null || backupQueueOver){
+					TopicQueue queue = TopicQueuePool.getQueue(topic.getTopic());
+					if(null != queue){
+						tpc = queue.poll();
+						readCounter = queue.getReadIndex().getReadCounter();
 					}
 				}
 				if(null != tpc){
 					Topic tmp = (Topic) DataUtils.deserialize(tpc);
+					tmp.setReadCounter(readCounter);
 					result.add(tmp);
 				}
 			}
@@ -50,8 +59,8 @@ public class FetchRequestHandler implements RequestHandler {
 		response.setSeqId(request.getSeqId());
 		if(result.size() > 0){
 			response.setBody(DataUtils.serialize(result));
+			LOGGER.info("Fetch request handler, message:"+result.toString());
 		}
-		LOGGER.info("Fetch request handler, message:"+result.toString());
 		return response;
 	}
 

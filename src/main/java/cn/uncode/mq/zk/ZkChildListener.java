@@ -21,7 +21,6 @@ public interface ZkChildListener {
      *
      * @param parentPath      The parent path
      * @param currentChildren The children or null if the root node (parent path) was deleted.
-     * @throws Exception
      */
     public void handleChildChange(String parentPath, List<String> currentChildren) throws Exception;
 }

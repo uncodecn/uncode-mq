@@ -27,7 +27,7 @@ public class ConsumerRunnable extends Thread{
 	        	}catch (Exception e) {
 	    	    	LOGGER.error("consumer fetch error ", e);
 	    	    }
-	        	Thread.sleep(3000);
+	        	Thread.sleep(500);
 	        }
 	    }catch (InterruptedException e) {
 	    	LOGGER.error("error in consumer runnable ", e);

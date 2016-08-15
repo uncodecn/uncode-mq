@@ -3,6 +3,7 @@ package cn.uncode.mq.store.zk;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,7 +26,7 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
     public static final String ZK_INDEX = ZkUtils.ZK_MQ_BASE + "/index";
     private final ZkClient zkClient;
     private final String queueName;
-    private ByteBuffer readIndex;
+    private ByteBuffer index;
     private AtomicInteger readTimes = new AtomicInteger(0);
     
     
@@ -37,6 +38,7 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
             zkClient.createPersistent(ZK_INDEX, true);
         }
     	String path = formatZkIndexPath(this.queueName);
+    	path += "/" + Cluster.getCurrent().getMaster().getHost();
 		if (zkClient.exists(path)) {
 			byte[] datas = zkClient.readData(path);
 			if (null != datas) {
@@ -52,7 +54,7 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
     }
 
 	public void init() {
-		readIndex = ByteBuffer.allocate(INDEX_SIZE);
+		index = ByteBuffer.allocate(INDEX_SIZE);
 		putMagic();
 		putReadNum(0);
 		putReadPosition(0);
@@ -63,18 +65,18 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
 	}
 
 	public void buildFromData(byte[] datas) {
-		readIndex = ByteBuffer.wrap(datas);
+		index = ByteBuffer.wrap(datas);
 		byte[] bytes = new byte[8];
-		readIndex.get(bytes, 0, 8);
+		index.get(bytes, 0, 8);
 		if (!MAGIC.equals(new String(bytes))) {
 		    throw new IllegalArgumentException("version mismatch");
 		}
-		this.readNum = readIndex.getInt();
-		this.readPosition = readIndex.getInt();
-		this.readCounter = readIndex.getInt();
-		this.writeNum = readIndex.getInt();
-		this.writePosition = readIndex.getInt();
-		this.writeCounter = readIndex.getInt();
+		this.readNum = index.getInt();
+		this.readPosition = index.getInt();
+		this.readCounter = index.getInt();
+		this.writeNum = index.getInt();
+		this.writePosition = index.getInt();
+		this.writeCounter = index.getInt();
 	}
 
 	private String formatZkIndexPath(String queueName) {
@@ -106,44 +108,44 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
     }
 
     public void putMagic() {
-    	readIndex.position(0);
-    	readIndex.put(MAGIC.getBytes());
+    	index.position(0);
+    	index.put(MAGIC.getBytes());
     }
 
     public void putReadNum(int readNum) {
     	
-    	readIndex.position(READ_NUM_OFFSET);
-    	readIndex.putInt(readNum);
+    	index.position(READ_NUM_OFFSET);
+    	index.putInt(readNum);
         this.readNum = readNum;
     }
 
     public void putReadPosition(int readPosition) {
-    	readIndex.position(READ_POS_OFFSET);
-    	readIndex.putInt(readPosition);
+    	index.position(READ_POS_OFFSET);
+    	index.putInt(readPosition);
         this.readPosition = readPosition;
     }
 
     public void putReadCounter(int readCounter) {
-    	readIndex.position(READ_CNT_OFFSET);
-    	readIndex.putInt(readCounter);
+    	index.position(READ_CNT_OFFSET);
+    	index.putInt(readCounter);
         this.readCounter = readCounter;
     }
     
     public void putWritePosition(int writePosition) {
-    	readIndex.position(WRITE_POS_OFFSET);
-    	readIndex.putInt(writePosition);
+    	index.position(WRITE_POS_OFFSET);
+    	index.putInt(writePosition);
         this.writePosition = writePosition;
     }
 
     public void putWriteNum(int writeNum) {
-    	readIndex.position(WRITE_NUM_OFFSET);
-    	readIndex.putInt(writeNum);
+    	index.position(WRITE_NUM_OFFSET);
+    	index.putInt(writeNum);
         this.writeNum = writeNum;
     }
     
     public void putWriteCounter(int writeCounter) {
-    	readIndex.position(WRITE_CNT_OFFSET);
-    	readIndex.putInt(writeCounter);
+    	index.position(WRITE_CNT_OFFSET);
+    	index.putInt(writeCounter);
         this.writeCounter = writeCounter;
     }
     
@@ -153,23 +155,79 @@ public class ZkTopicQueueReadIndex implements TopicQueueIndex{
 
     public void sync() {
     	String path = formatZkIndexPath(this.queueName);
-    	if(readTimes.get() > 0){
-    		if (readIndex != null) {
-            	zkClient.writeData(path, readIndex.array());
-            }
-    		readTimes.decrementAndGet();
-    	}else{
-    		byte[] datas = zkClient.readData(path);
-    		if(null != datas && datas.length > 0){
-    			buildFromData(datas);
-    		}else{
-    			init();
-    		}
+    	String slaveOf = null;
+    	if(Cluster.getCurrent() != null){
+    		slaveOf = Cluster.getCurrent().getSlaveOf().getHost();
     	}
-        path += "/" + Cluster.getMaster().getZkIndexMasterSlave();
-        if(!zkClient.exists(path)){
-        	zkClient.createEphemeral(path, null);
-        }
+    	if(StringUtils.isNotBlank(slaveOf)){
+    		if(readTimes.get() > 0){
+        		if (index != null) {
+        			ZkUtils.makeSurePersistentPathExists(zkClient, path + "/" + slaveOf);
+                	zkClient.writeData(path + "/" + slaveOf, index.array());
+                	index.position(0);
+                    StringBuilder sb  = new StringBuilder();
+                    byte[] bytes = new byte[8];
+                    index.get(bytes, 0, 8);
+                    sb.append("zk index").append("=>").append("readNum:").append(index.getInt())
+        			.append(",readPosition:").append(index.getInt())
+        			.append(",readCounter:").append(index.getInt())
+        			.append(",writeNum:").append(index.getInt())
+        			.append(",writePosition:").append(index.getInt())
+        			.append(",writeCounter:").append(index.getInt());
+                    //LOGGER.info(sb.toString());
+                }
+        		readTimes.decrementAndGet();
+        	}else{
+        		if(zkClient.exists(path + "/" + slaveOf)){
+        			byte[] datas = zkClient.readData(path + "/" + slaveOf);
+            		if(null != datas && datas.length > 0){
+            			buildFromData(datas);
+            		}else{
+            			init();
+            		}
+        		}else{
+        			init();
+        		}
+        		StringBuilder sb  = new StringBuilder();
+                sb.append("index read from zk").append("=>").append("readNum:").append(getReadNum())
+    			.append(",readPosition:").append(getReadPosition())
+    			.append(",readCounter:").append(getReadCounter())
+    			.append(",writeNum:").append(getWriteNum())
+    			.append(",writePosition:").append(getWritePosition())
+    			.append(",writeCounter:").append(getWriteCounter());
+                //LOGGER.info(sb.toString());
+        	}
+		}
+    	if(Cluster.getCurrent() != null){
+    		path += "/" + Cluster.getCurrent().getZkIndexMasterSlave();
+            if(!zkClient.exists(path)){
+            	zkClient.createEphemeral(path, null);
+            }
+    	}
+    }
+    
+    public void sync2zk(int readNum, int readPosition, int readCounter, int writeNum, int writePosition, int writeCounter) {
+    	ZkUtils.getCluster(zkClient);
+    	String path = formatZkIndexPath(this.queueName);
+    	if(Cluster.getCurrent() != null){
+    		if(Cluster.getCurrent().getMaster().getHost().equals(Cluster.getMasterIps().peek())){
+            	index = ByteBuffer.allocate(INDEX_SIZE);
+        		putMagic();
+        		putReadNum(readNum);
+        		putReadPosition(readPosition);
+        		putReadCounter(readCounter);
+        		putWriteNum(writeNum);
+        		putWritePosition(writePosition);
+        		putWriteCounter(writeCounter);
+        		ZkUtils.makeSurePersistentPathExists(zkClient, path + "/" + Cluster.getCurrent().getMaster().getHost());
+        		zkClient.writeData(path + "/" + Cluster.getCurrent().getMaster().getHost(), index.array());
+        	}
+    		//
+            path += "/" + Cluster.getCurrent().getZkIndexMasterSlave();
+            if(!zkClient.exists(path)){
+            	zkClient.createEphemeral(path, null);
+            }
+    	}
     }
 
     public void close() {

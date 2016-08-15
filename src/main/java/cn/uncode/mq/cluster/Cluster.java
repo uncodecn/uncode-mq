@@ -37,10 +37,10 @@ import org.apache.commons.lang3.StringUtils;
 public class Cluster{
 
 	private static final Queue<Group> MASTER_BROKER_GROUP = new LinkedBlockingDeque<Group>();
-	private static final Set<String> MASTER_BROKER_IP = new HashSet<String>();
+	private static final Queue<String> MASTER_BROKER_IP = new LinkedBlockingDeque<String>();
 	private static final ConcurrentHashMap<String, List<Group>> SLAVE_BROKER = new ConcurrentHashMap<>();//<queueName,List>
 	private static final ConcurrentHashMap<String, Set<String>> HOSTS_QUEUES = new ConcurrentHashMap<>();//<host,queue>
-	private static Group master;
+	private static Group current;
 	
 
     public static void addGroup(Group group){
@@ -48,7 +48,15 @@ public class Cluster{
     	MASTER_BROKER_IP.add(group.getMaster().getHost());
     }
     
-    public static Set<String> getMasterIps(){
+    public static Queue<Group> getMasters(){
+    	return MASTER_BROKER_GROUP;
+    }
+    
+    public static ConcurrentHashMap<String, List<Group>> getQueueGroups(){
+    	return SLAVE_BROKER;
+    }
+    
+    public static Queue<String> getMasterIps(){
     	return MASTER_BROKER_IP;
     }
     
@@ -56,7 +64,9 @@ public class Cluster{
     	if(groups != null){
     		MASTER_BROKER_GROUP.addAll(groups);
         	for(Group gp:groups){
-        		MASTER_BROKER_IP.add(gp.getMaster().getHost());
+        		if(null != gp.getMaster()){
+        			MASTER_BROKER_IP.add(gp.getMaster().getHost());
+        		}
         	}
     	}
     }
@@ -74,20 +84,8 @@ public class Cluster{
     	MASTER_BROKER_GROUP.clear();
     	MASTER_BROKER_IP.clear();
     	SLAVE_BROKER.clear();
-    }
-    
-    public static void clearHostQueue(){
     	HOSTS_QUEUES.clear();
     }
-    
-    /**
-     * 取新的可用组，慎用
-     * @return
-     */
-    public static void peekAndSetMaster(){
-    	setMaster(MASTER_BROKER_GROUP.peek());
-    }
-    
     
     public static Group peek(){
     	return MASTER_BROKER_GROUP.peek();
@@ -100,7 +98,7 @@ public class Cluster{
     
     /**
      * 
-     * @param queueName
+     * @param queueName name list
      * @return ip:queue name array
      */
     public static Map<Broker, List<String>> getCustomerServerByQueues(String[] queueName){
@@ -111,7 +109,7 @@ public class Cluster{
     				List<Group> groups = SLAVE_BROKER.get(name);
     				Broker found = null;
     				for(Group gp:groups){
-    					if(StringUtils.isNotBlank(gp.getMaster().getShost())){
+    					if(gp.getMaster() != null && StringUtils.isNotBlank(gp.getMaster().getShost())){
     						found = gp.getMaster();
     						break;
     					}
@@ -134,12 +132,12 @@ public class Cluster{
     	return hostsMap;
     }
     
-	public static Group getMaster() {
-		return master;
+	public static Group getCurrent() {
+		return current;
 	}
 
-	public static void setMaster(Group master) {
-		Cluster.master = master;
+	public static void setCurrent(Group current) {
+		Cluster.current = current;
 	}
 
 	public static void putSlave(String queueName, String masterHost, String slaveHost){
@@ -164,7 +162,7 @@ public class Cluster{
 			Group temp = MASTER_BROKER_GROUP.peek();
 			Broker slave = null;
 			boolean slaveFlag = false;
-			if(StringUtils.isNoneBlank(slaveHost)){
+			if(StringUtils.isNotBlank(slaveHost)){
 				if(MASTER_BROKER_IP.contains(slaveHost)){
 					slave = new Broker(slaveHost, temp.getMaster().getPort());
 					slaveFlag = true;

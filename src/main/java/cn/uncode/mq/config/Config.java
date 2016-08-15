@@ -1,5 +1,6 @@
 package cn.uncode.mq.config;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -27,11 +28,34 @@ public class Config {
 	}
 	
 	public Config(String filename){
+		File cfg = new File("./"+filename);
 		properties = new Properties();
         FileInputStream fis = null;
         try {
-            fis = new FileInputStream(filename);
-            properties.load(fis);
+        	
+    		if (cfg.exists()) {
+    			fis = new FileInputStream(cfg);
+                properties.load(fis);
+            }else{
+            	throw new RuntimeException("Config file is null");
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        } finally {
+            Closer.closeQuietly(fis);
+        }
+	}
+	
+	public Config(File cfg){
+		properties = new Properties();
+        FileInputStream fis = null;
+        try {
+    		if (cfg.exists()) {
+    			fis = new FileInputStream(cfg);
+                properties.load(fis);
+            }else{
+            	throw new RuntimeException("Config file is null");
+            }
         } catch (IOException ex) {
             throw new RuntimeException(ex);
         } finally {
@@ -42,7 +66,6 @@ public class Config {
      * Get a string property, or, if no such property is defined, return
      * the given default value
      *
-     * @param props        the properties
      * @param name         the key in the properties
      * @param defaultValue the default value if the key not exists
      * @return value in the props or defaultValue while name not exist

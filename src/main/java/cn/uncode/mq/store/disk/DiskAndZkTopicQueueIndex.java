@@ -12,9 +12,12 @@ import java.security.PrivilegedAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.uncode.mq.cluster.Cluster;
 import cn.uncode.mq.store.TopicQueueIndex;
+import cn.uncode.mq.store.TopicQueuePool;
 import cn.uncode.mq.store.zk.ZkTopicQueueReadIndex;
 import cn.uncode.mq.util.Cleaner;
+import cn.uncode.mq.util.ZkUtils;
 import cn.uncode.mq.zk.ZkClient;
 
 public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
@@ -32,12 +35,13 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
     private RandomAccessFile indexFile;
     private FileChannel fileChannel;
     // 读写分离
-    private MappedByteBuffer writeIndex;
-    private MappedByteBuffer readIndex;
+    private MappedByteBuffer index;
+//    private MappedByteBuffer readIndex;
     
 //    private final boolean backup;
     //zk
-    private ZkTopicQueueReadIndex zkReadIndex;
+    private ZkTopicQueueReadIndex zkIndex;
+    private int zkSyncTimes = 0;
     
     
 //    public DiskAndZkTopicQueueIndex(String queueName, String fileDir, ZkClient zkClient) {
@@ -63,14 +67,14 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
                 this.writePosition = indexFile.readInt();
                 this.writeCounter = indexFile.readInt();
                 this.fileChannel = indexFile.getChannel();
-                this.writeIndex = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
-                this.writeIndex = writeIndex.load();
-                this.readIndex = (MappedByteBuffer) writeIndex.duplicate();
+                this.index = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
+                this.index = index.load();
+//                this.readIndex = (MappedByteBuffer) index.duplicate();
             } else {
                 this.indexFile = new RandomAccessFile(file, "rw");
                 this.fileChannel = indexFile.getChannel();
-                this.writeIndex = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
-                this.readIndex = (MappedByteBuffer) writeIndex.duplicate();
+                this.index = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
+//                this.readIndex = (MappedByteBuffer) index.duplicate();
                 putMagic();
                 putReadNum(0);
                 putReadPosition(0);
@@ -84,9 +88,17 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
         }
         //zk
         if(null != zkClient){
-        	this.zkReadIndex = new ZkTopicQueueReadIndex(zkClient, queueName);
+        	this.zkIndex = new ZkTopicQueueReadIndex(zkClient, queueName);
         }
-        
+        if(zkIndex.getReadNum() > this.readNum){
+        	this.readNum = zkIndex.getReadNum();
+        }
+        if(zkIndex.getReadCounter() > this.readCounter){
+        	this.readCounter = zkIndex.getReadCounter();
+        }
+        if(zkIndex.getReadPosition() > this.readPosition){
+        	this.readPosition = zkIndex.getReadPosition();
+        }
     }
 
     public static boolean isIndexFile(String fileName) {
@@ -155,10 +167,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putMagic() {
-        this.writeIndex.position(0);
-        this.writeIndex.put(MAGIC.getBytes());
-        if(zkReadIndex != null){
-        	zkReadIndex.putMagic();
+        this.index.position(0);
+        this.index.put(MAGIC.getBytes());
+        if(zkIndex != null){
+        	zkIndex.putMagic();
         }
     }
 
@@ -167,10 +179,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWritePosition(int writePosition) {
-        this.writeIndex.position(WRITE_POS_OFFSET);
-        this.writeIndex.putInt(writePosition);
-        if(zkReadIndex != null){
-        	zkReadIndex.putWritePosition(writePosition);
+        this.index.position(WRITE_POS_OFFSET);
+        this.index.putInt(writePosition);
+        if(zkIndex != null){
+        	zkIndex.putWritePosition(writePosition);
         }
         this.writePosition = writePosition;
     }
@@ -180,10 +192,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWriteNum(int writeNum) {
-        this.writeIndex.position(WRITE_NUM_OFFSET);
-        this.writeIndex.putInt(writeNum);
-        if(zkReadIndex != null){
-        	zkReadIndex.putWriteNum(writeNum);
+        this.index.position(WRITE_NUM_OFFSET);
+        this.index.putInt(writeNum);
+        if(zkIndex != null){
+        	zkIndex.putWriteNum(writeNum);
         }
         this.writeNum = writeNum;
     }
@@ -193,10 +205,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWriteCounter(int writeCounter) {
-        this.writeIndex.position(WRITE_CNT_OFFSET);
-        this.writeIndex.putInt(writeCounter);
-        if(zkReadIndex != null){
-        	zkReadIndex.putWriteCounter(writeCounter);
+        this.index.position(WRITE_CNT_OFFSET);
+        this.index.putInt(writeCounter);
+        if(zkIndex != null){
+        	zkIndex.putWriteCounter(writeCounter);
         }
         this.writeCounter = writeCounter;
     }
@@ -206,10 +218,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadNum(int readNum) {
-        this.readIndex.position(READ_NUM_OFFSET);
-        this.readIndex.putInt(readNum);
-        if(zkReadIndex != null){
-        	zkReadIndex.putReadNum(readNum);
+        this.index.position(READ_NUM_OFFSET);
+        this.index.putInt(readNum);
+        if(zkIndex != null){
+        	zkIndex.putReadNum(readNum);
         }
         this.readNum = readNum;
     }
@@ -219,10 +231,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadPosition(int readPosition) {
-        this.readIndex.position(READ_POS_OFFSET);
-        this.readIndex.putInt(readPosition);
-        if(zkReadIndex != null){
-        	zkReadIndex.putReadPosition(readPosition);
+        this.index.position(READ_POS_OFFSET);
+        this.index.putInt(readPosition);
+        if(zkIndex != null){
+        	zkIndex.putReadPosition(readPosition);
         }
         this.readPosition = readPosition;
     }
@@ -232,10 +244,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadCounter(int readCounter) {
-        this.readIndex.position(READ_CNT_OFFSET);
-        this.readIndex.putInt(readCounter);
-        if(zkReadIndex != null){
-        	zkReadIndex.putReadCounter(readCounter);
+        this.index.position(READ_CNT_OFFSET);
+        this.index.putInt(readCounter);
+        if(zkIndex != null){
+        	zkIndex.putReadCounter(readCounter);
         }
         this.readCounter = readCounter;
     }
@@ -247,15 +259,15 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	public void reset() {
         int size = writeCounter - readCounter;
         putReadCounter(0);
-        if(zkReadIndex != null){
-        	zkReadIndex.putReadCounter(0);
+        if(zkIndex != null){
+        	zkIndex.putReadCounter(0);
         }
         putWriteCounter(size);
         if (size == 0 && readNum == writeNum) {
             putReadPosition(0);
             putWritePosition(0);
-            if(zkReadIndex != null){
-            	zkReadIndex.putReadPosition(0);
+            if(zkIndex != null){
+            	zkIndex.putReadPosition(0);
             }
         }
     }
@@ -265,12 +277,40 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void sync() {
-        if (writeIndex != null) {
-            writeIndex.force();
+        if (index != null) {
+            index.force();
+            index.position(0);
+            StringBuilder sb  = new StringBuilder();
+            byte[] bytes = new byte[8];
+            index.get(bytes, 0, 8);
+            sb.append("disk index").append("=>").append("readNum:").append(index.getInt())
+			.append(",readPosition:").append(index.getInt())
+			.append(",readCounter:").append(index.getInt())
+			.append(",writeNum:").append(index.getInt())
+			.append(",writePosition:").append(index.getInt())
+			.append(",writeCounter:").append(index.getInt());
+            //LOGGER.info(sb.toString());
         }
-        if (null != this.zkReadIndex) {
-        	zkReadIndex.sync();
+        if (null != this.zkIndex) {
+        	if(zkSyncTimes >= TopicQueuePool.ZK_SYNC_DATA_PERSISTENCE_INTERVAL){
+        		try {
+            		zkIndex.sync2zk(getReadNum(), getReadPosition(), getReadCounter(), getWriteNum(), getWritePosition(), getWriteCounter());
+    			} catch (Exception e) {
+    				LOGGER.error("sync to zookeper error", e);
+    			}
+            	StringBuilder sb  = new StringBuilder();
+                sb.append("zk index").append("=>").append("readNum:").append(getReadNum())
+    			.append(",readPosition:").append(getReadPosition())
+    			.append(",readCounter:").append(getReadCounter())
+    			.append(",writeNum:").append(getWriteNum())
+    			.append(",writePosition:").append(getWritePosition())
+    			.append(",writeCounter:").append(getWriteCounter());
+                //LOGGER.info(sb.toString());
+                zkSyncTimes = 0;
+        	}
+        	
         }
+        zkSyncTimes++;
     }
 
     /* (non-Javadoc)
@@ -279,16 +319,16 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
     @Override
 	public void close() {
         try {
-            if (writeIndex == null) {
+            if (index == null) {
                 return;
             }
             sync();
             AccessController.doPrivileged(new PrivilegedAction<Object>() {
                 public Object run() {
                     try {
-                        Method getCleanerMethod = writeIndex.getClass().getMethod("cleaner");
+                        Method getCleanerMethod = index.getClass().getMethod("cleaner");
                         getCleanerMethod.setAccessible(true);
-                        Cleaner cleaner = (Cleaner) getCleanerMethod.invoke(writeIndex);
+                        Cleaner cleaner = (Cleaner) getCleanerMethod.invoke(index);
                         cleaner.clean();
                     } catch (Exception e) {
                         LOGGER.error("close fqueue index file failed", e);
@@ -296,11 +336,10 @@ public class DiskAndZkTopicQueueIndex implements TopicQueueIndex {
                     return null;
                 }
             });
-            writeIndex = null;
-            readIndex = null;
+            index = null;
             fileChannel.close();
             indexFile.close();
-            zkReadIndex.close();
+            zkIndex.close();
         } catch (IOException e) {
             LOGGER.error("close fqueue index file failed", e);
         }

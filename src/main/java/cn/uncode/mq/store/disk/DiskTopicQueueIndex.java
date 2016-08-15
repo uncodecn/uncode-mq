@@ -30,8 +30,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
     private RandomAccessFile indexFile;
     private FileChannel fileChannel;
     // 读写分离
-    private MappedByteBuffer writeIndex;
-    private MappedByteBuffer readIndex;
+    private MappedByteBuffer index;
+//    private MappedByteBuffer readIndex;
     
 
     public DiskTopicQueueIndex(String queueName, String fileDir) {
@@ -52,14 +52,14 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
                 this.writePosition = indexFile.readInt();
                 this.writeCounter = indexFile.readInt();
                 this.fileChannel = indexFile.getChannel();
-                this.writeIndex = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
-                this.writeIndex = writeIndex.load();
-                this.readIndex = (MappedByteBuffer) writeIndex.duplicate();
+                this.index = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
+                this.index = index.load();
+//                this.readIndex = (MappedByteBuffer) index.duplicate();
             } else {
                 this.indexFile = new RandomAccessFile(file, "rw");
                 this.fileChannel = indexFile.getChannel();
-                this.writeIndex = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
-                this.readIndex = (MappedByteBuffer) writeIndex.duplicate();
+                this.index = fileChannel.map(FileChannel.MapMode.READ_WRITE, 0, INDEX_SIZE);
+//                this.readIndex = (MappedByteBuffer) index.duplicate();
                 putMagic();
                 putReadNum(0);
                 putReadPosition(0);
@@ -140,8 +140,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putMagic() {
-        this.writeIndex.position(0);
-        this.writeIndex.put(MAGIC.getBytes());
+        this.index.position(0);
+        this.index.put(MAGIC.getBytes());
     }
 
     /* (non-Javadoc)
@@ -149,8 +149,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWritePosition(int writePosition) {
-        this.writeIndex.position(WRITE_POS_OFFSET);
-        this.writeIndex.putInt(writePosition);
+        this.index.position(WRITE_POS_OFFSET);
+        this.index.putInt(writePosition);
         this.writePosition = writePosition;
     }
 
@@ -159,8 +159,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWriteNum(int writeNum) {
-        this.writeIndex.position(WRITE_NUM_OFFSET);
-        this.writeIndex.putInt(writeNum);
+        this.index.position(WRITE_NUM_OFFSET);
+        this.index.putInt(writeNum);
         this.writeNum = writeNum;
     }
 
@@ -169,8 +169,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putWriteCounter(int writeCounter) {
-        this.writeIndex.position(WRITE_CNT_OFFSET);
-        this.writeIndex.putInt(writeCounter);
+        this.index.position(WRITE_CNT_OFFSET);
+        this.index.putInt(writeCounter);
         this.writeCounter = writeCounter;
     }
 
@@ -179,8 +179,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadNum(int readNum) {
-        this.readIndex.position(READ_NUM_OFFSET);
-        this.readIndex.putInt(readNum);
+        this.index.position(READ_NUM_OFFSET);
+        this.index.putInt(readNum);
         this.readNum = readNum;
     }
 
@@ -189,8 +189,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadPosition(int readPosition) {
-        this.readIndex.position(READ_POS_OFFSET);
-        this.readIndex.putInt(readPosition);
+        this.index.position(READ_POS_OFFSET);
+        this.index.putInt(readPosition);
         this.readPosition = readPosition;
     }
 
@@ -199,8 +199,8 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void putReadCounter(int readCounter) {
-        this.readIndex.position(READ_CNT_OFFSET);
-        this.readIndex.putInt(readCounter);
+        this.index.position(READ_CNT_OFFSET);
+        this.index.putInt(readCounter);
         this.readCounter = readCounter;
     }
 
@@ -223,8 +223,19 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
 	 */
     @Override
 	public void sync() {
-        if (writeIndex != null) {
-            writeIndex.force();
+        if (index != null) {
+            index.force();
+            index.position(0);
+            StringBuilder sb  = new StringBuilder();
+            byte[] bytes = new byte[8];
+            index.get(bytes, 0, 8);
+            sb.append("disk index").append("=>").append("readNum:").append(index.getInt())
+			.append(",readPosition:").append(index.getInt())
+			.append(",readCounter:").append(index.getInt())
+			.append(",writeNum:").append(index.getInt())
+			.append(",writePosition:").append(index.getInt())
+			.append(",writeCounter:").append(index.getInt());
+            //LOGGER.info(sb.toString());
         }
     }
 
@@ -234,16 +245,16 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
     @Override
 	public void close() {
         try {
-            if (writeIndex == null) {
+            if (index == null) {
                 return;
             }
             sync();
             AccessController.doPrivileged(new PrivilegedAction<Object>() {
                 public Object run() {
                     try {
-                        Method getCleanerMethod = writeIndex.getClass().getMethod("cleaner");
+                        Method getCleanerMethod = index.getClass().getMethod("cleaner");
                         getCleanerMethod.setAccessible(true);
-                        Cleaner cleaner = (Cleaner) getCleanerMethod.invoke(writeIndex);
+                        Cleaner cleaner = (Cleaner) getCleanerMethod.invoke(index);
                         cleaner.clean();
                     } catch (Exception e) {
                         LOGGER.error("close fqueue index file failed", e);
@@ -251,8 +262,7 @@ public class DiskTopicQueueIndex implements TopicQueueIndex {
                     return null;
                 }
             });
-            writeIndex = null;
-            readIndex = null;
+            index = null;
             fileChannel.close();
             indexFile.close();
         } catch (IOException e) {

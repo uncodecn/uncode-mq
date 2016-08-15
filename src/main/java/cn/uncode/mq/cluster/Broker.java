@@ -32,7 +32,6 @@ public class Broker implements Serializable{
      *
      * @param host      broker hostname
      * @param port      broker port
-     * @param autocreated auto-create new topics
      */
     public Broker(String host, int port) {
         this.host = host;

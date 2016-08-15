@@ -2,6 +2,7 @@ package cn.uncode.mq.server.handlers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,14 +27,30 @@ public class ReplicaRequestHandler extends AbstractRequestHandler {
 		super(config);
 	}
 
-	private final static int FETCH_SIZE = 10;
-	
 	private final static Logger LOGGER = LoggerFactory.getLogger(ReplicaRequestHandler.class);
 	
 	@Override
 	public Message handler(Message request) {
+		int fetchSize = config.getReplicaFetchSize();
 		List<Topic> result = new ArrayList<Topic>();
 		List<Backup> backups = (List<Backup>) DataUtils.deserialize(request.getBody());
+		Set<String> queueList = TopicQueuePool.getQueueNameFromDisk();
+		if(queueList != null && queueList.size() > 0){
+			if(backups == null){
+				backups = new ArrayList<Backup>();
+			}
+			for(Backup backup:backups){
+				if(queueList.contains(backup.getQueueName())){
+					queueList.remove(backup.getQueueName());
+				}
+			}
+		}
+		if(queueList != null && queueList.size() > 0){
+			for(String queue:queueList){
+				Backup backup = new Backup(queue, 0, 0, 0);
+				backups.add(backup);
+			}
+		}
 		if(backups != null){
 			for(Backup backup:backups){
 				TopicQueue queue = TopicQueuePool.getQueue(backup.getQueueName());
@@ -41,7 +58,7 @@ public class ReplicaRequestHandler extends AbstractRequestHandler {
 					byte[] tpc = null;
 					int rnum = backup.getSlaveWriteNum();
 					int rposition = backup.getSlaveWritePosition();
-					for(int i=0;i<FETCH_SIZE;i++){
+					for(int i=0;i<fetchSize;i++){
 						tpc = queue.replicaRead(rnum, rposition);
 						if(null != tpc){
 							rposition = rposition + tpc.length + 4;
@@ -58,8 +75,9 @@ public class ReplicaRequestHandler extends AbstractRequestHandler {
 		response.setSeqId(request.getSeqId());
 		if(result.size() > 0){
 			response.setBody(DataUtils.serialize(result));
+			//LOGGER.info("Fetch request handler, message:"+result.toString());
 		}
-		LOGGER.info("Fetch request handler, message:"+result.toString());
+		
 		return response;
 	}
 

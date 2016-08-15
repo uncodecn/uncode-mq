@@ -1,5 +1,9 @@
 package cn.uncode.mq.server.backup;
 
+import static cn.uncode.mq.store.TopicQueueBlock.BLOCK_SIZE;
+import static cn.uncode.mq.store.TopicQueueBlock.BLOCK_FILE_SUFFIX;
+import static cn.uncode.mq.store.TopicQueueBlock.EOF;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -16,15 +20,11 @@ import org.slf4j.LoggerFactory;
 import cn.uncode.mq.store.disk.DiskTopicQueueIndex;
 import cn.uncode.mq.store.zk.ZkTopicQueueReadIndex;
 import cn.uncode.mq.util.Cleaner;
+import cn.uncode.mq.util.DataUtils;
 
 public class BackupQueueBlock {
 	
 	private final Logger LOGGER = LoggerFactory.getLogger(BackupQueueBlock.class);
-	
-	private static final String BLOCK_FILE_SUFFIX = ".umq";//数据文件
-	private static final int BLOCK_SIZE = 32 * 1024 * 1024;//32MB
-	
-	private final int EOF = -1;
 	
 	private String blockFilePath;
     private DiskTopicQueueIndex writeIndex;
@@ -43,6 +43,7 @@ public class BackupQueueBlock {
         this.fileChannel = fileChannel;
         this.byteBuffer = byteBuffer;
         this.mappedBlock = mappedBlock;
+        DataUtils.printStackTrace();
     }
     
     public BackupQueueBlock(DiskTopicQueueIndex writeIndex, ZkTopicQueueReadIndex readIndex, String blockFilePath) {
@@ -58,6 +59,7 @@ public class BackupQueueBlock {
         } catch (Exception e) {
             throw new IllegalArgumentException(e);
         }
+        DataUtils.printStackTrace();
     }
 
     public BackupQueueBlock duplicate() {
@@ -113,7 +115,18 @@ public class BackupQueueBlock {
         byteBuffer.position(readPosition);
         int dataLength = byteBuffer.getInt();
         if (dataLength <= 0) {
-            return null;
+//        	int correctPosition = 0;
+//        	if(readNum < writeNum && readPosition < BLOCK_SIZE){
+//        		correctPosition = correctPosition(readPosition);
+//        	}
+//        	if(correctPosition > 0){
+//        		readPosition = correctPosition;
+//        		byteBuffer.position(readPosition);
+//                dataLength = byteBuffer.getInt();
+//        	}
+//        	if (dataLength <= 0){
+        		return null;
+//        	}
         }
         bytes = new byte[dataLength];
         byteBuffer.get(bytes);
@@ -121,6 +134,22 @@ public class BackupQueueBlock {
         readIndex.putReadCounter(readIndex.getReadCounter() + 1);
         readIndex.activeSyncForRead();//check again
         return bytes;
+    }
+    
+    private int correctPosition(int errorPosition){
+    	int readPosition = 0;
+    	while(readPosition < errorPosition){
+    		byteBuffer.position(readPosition);
+    		 int dataLength = byteBuffer.getInt();
+    		 if(dataLength > 0){
+    			 byte[] bytes = new byte[dataLength];
+        	     byteBuffer.get(bytes);
+        	     readPosition += bytes.length + 4;
+    		 }else{
+    			 break;
+    		 }
+    	}
+    	return readPosition;
     }
 
     public void sync() {

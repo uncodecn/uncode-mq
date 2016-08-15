@@ -6,9 +6,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.lang3.ArrayUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import cn.uncode.mq.network.Message;
 import cn.uncode.mq.store.TopicQueueBlock;
+import cn.uncode.mq.store.TopicQueueIndex;
 import cn.uncode.mq.store.disk.DiskTopicQueueIndex;
 import cn.uncode.mq.store.zk.ZkTopicQueueReadIndex;
 import cn.uncode.mq.zk.ZkClient;
@@ -17,6 +20,7 @@ import io.netty.buffer.PooledByteBufAllocator;
 
 public class BackupQueue extends AbstractQueue<byte[]> {
 	
+	private static final Logger LOGGER = LoggerFactory.getLogger(BackupQueue.class);
 
     private String queueName;
     private String fileDir;
@@ -38,7 +42,16 @@ public class BackupQueue extends AbstractQueue<byte[]> {
         this.size = new AtomicInteger(writeIndex.getWriteCounter() - readIndex.getReadCounter());
         String filePath = BackupQueueBlock.formatBlockFilePath(queueName, writeIndex.getWriteNum(), fileDir);
         this.writeBlock = new BackupQueueBlock(writeIndex, readIndex, filePath);
-        this.readBlock = new BackupQueueBlock(writeIndex, readIndex, filePath);
+        if (readIndex.getReadNum() == writeIndex.getWriteNum()) {
+            this.readBlock = this.writeBlock.duplicate();
+        } else {
+        	filePath = BackupQueueBlock.formatBlockFilePath(queueName, readIndex.getReadNum(), fileDir);
+            this.readBlock = new BackupQueueBlock(writeIndex, readIndex, filePath);
+        }
+    }
+    
+    public TopicQueueIndex getReadIndex(){
+    	return readIndex;
     }
 
     @Override
@@ -144,7 +157,11 @@ public class BackupQueue extends AbstractQueue<byte[]> {
     }
 
     public void sync() {
-    	readIndex.sync();
+    	try {
+    		readIndex.sync();
+		} catch (Exception e) {
+			LOGGER.error("sync to zk error", e);
+		}
     	writeIndex.sync();
         // read block只读，不用同步
         writeBlock.sync();

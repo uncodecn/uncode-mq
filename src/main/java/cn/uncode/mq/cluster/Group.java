@@ -1,12 +1,12 @@
 package cn.uncode.mq.cluster;
 
 import java.io.Serializable;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 
 import org.apache.commons.lang3.StringUtils;
 
 public class Group implements Serializable {
+	
+	public static final String QUEUE_INDEX_PREFIX = "ms-";
 
 	/**
 	 * 
@@ -27,16 +27,13 @@ public class Group implements Serializable {
 	}
 	
 	public Group(String name, String hostname, int port, String replicaHost){
-		if (name == null) {
-            try {
-            	name = InetAddress.getLocalHost().getHostName();
-            } catch (UnknownHostException e) {
-                throw new RuntimeException("cannot get local host, setting 'hostname' in configuration");
-            }
-        }
-        this.setName(name);
+		String groupName = "ser";
+		if(StringUtils.isNotBlank(name)){
+			groupName = name;
+		}
+        this.setName(groupName + "-");
         this.master = new Broker(hostname, port);
-        if(StringUtils.isNoneBlank(replicaHost)){
+        if(StringUtils.isNotBlank(replicaHost)){
         this.slaveOf = new Broker(replicaHost, port);
         }
 	}
@@ -77,19 +74,23 @@ public class Group implements Serializable {
 	}
 	
 	public String getZkIndexMasterSlave(){
-		StringBuilder sb = new StringBuilder();
-		if(master != null && StringUtils.isNoneBlank(master.getHost())){
+		StringBuilder sb = new StringBuilder(QUEUE_INDEX_PREFIX);
+		if(master != null && StringUtils.isNotBlank(master.getHost())){
 			sb.append(master.getHost()).append(":");
 		}
 //		if(slaves.size() == 0){
 //			sb.insert(0, "127.0.0.1:");
 //		}else{
-		if(slaveOf != null && StringUtils.isNoneBlank(slaveOf.getHost())){
+		if(slaveOf != null && StringUtils.isNotBlank(slaveOf.getHost())){
 			sb.append(slaveOf.getHost()).append(":");
 		}
 //		}
 		sb.deleteCharAt(sb.lastIndexOf(":"));
 		return sb.toString();
+	}
+	
+	public String toString(){
+		return String.format("name:%s,master:[%s],slaveOf:[%s]", name, master==null?"":master.toString(), slaveOf==null?"":slaveOf.toString());
 	}
 
 

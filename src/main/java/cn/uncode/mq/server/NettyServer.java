@@ -40,6 +40,8 @@ public class NettyServer {
 	private final IntObjectMap<RequestHandler> handlerMap = new IntObjectHashMap<>(128);
 //	private final EmbeddedConsumer embeddedConsumer = new EmbeddedConsumer();
 	
+//	private final Scheduler scheduler = new Scheduler(1, "uncode-mq-server-", false);
+	
 	private ServerRegister serverRegister;
 	
 	public void start(int port){
@@ -94,10 +96,19 @@ public class NettyServer {
 			zkClient = serverRegister.startup(config);
 		}
 		
-		TopicQueuePool.startup(zkClient, config.getDataDir());
+//		if (this.scheduler != null) {
+//            this.scheduler.scheduleWithRate(new Runnable() {
+//				@Override
+//				public void run() {
+//					serverRegister.registerBrokerGroupInZk();
+//				}
+//			}, 30 * 1000, 60 * 1000L);
+//        }
+		
+		TopicQueuePool.startup(zkClient, config);
 		
 		if(null != config.getReplicaHost()){
-			EmbeddedConsumer.getInstance().start(config, zkClient);
+			EmbeddedConsumer.getInstance().start(config);
 		}
 		
 	}
@@ -127,8 +138,8 @@ public class NettyServer {
 	}
 
 	private ServerBootstrap configServer() {
-		bossGroup = new NioEventLoopGroup(2);
-		workerGroup = new NioEventLoopGroup(0);
+		bossGroup = new NioEventLoopGroup();
+		workerGroup = new NioEventLoopGroup();
 
 		ServerBootstrap b = new ServerBootstrap();
 		b.group(bossGroup, workerGroup)

@@ -13,7 +13,9 @@ public class Topic implements Serializable {
 	
 	private String topic;
 	
-	private List<Object> contents = new ArrayList<Object>();
+	private int readCounter;
+	
+	private List<Serializable> contents = new ArrayList<Serializable>();
 
 	public String getTopic() {
 		return topic;
@@ -23,16 +25,24 @@ public class Topic implements Serializable {
 		this.topic = topic;
 	}
 	
-	public List<Object> getContents() {
+	public List<Serializable> getContents() {
 		return contents;
 	}
 	
-	public void addContent(Object content){
+	public void addContent(Serializable content){
 		contents.add(content);
 	}
 
+	public int getReadCounter() {
+		return readCounter;
+	}
+
+	public void setReadCounter(int readCounter) {
+		this.readCounter = readCounter;
+	}
+
 	public String toString(){
-		return String.format("topic:%s,content:%s", topic, contents.toString());
+		return String.format("topic:%s,counter:%d,content:%s", topic, readCounter, contents.toString());
 	}
 	
 	

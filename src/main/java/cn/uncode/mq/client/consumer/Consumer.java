@@ -1,13 +1,15 @@
 package cn.uncode.mq.client.consumer;
 
+import java.io.File;
+import java.io.IOException;
 import java.net.ConnectException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -29,17 +31,24 @@ import cn.uncode.mq.server.ServerRegister;
 import cn.uncode.mq.util.DataUtils;
 import cn.uncode.mq.util.ZkUtils;
 import cn.uncode.mq.zk.ZkChildListener;
+import cn.uncode.mq.zk.ZkClient;
 
-public class Consumer extends NettyClient {
+public class Consumer{
 	
 	private final static Logger LOGGER = LoggerFactory.getLogger(Consumer.class);
 	
 	private static final Consumer INSTANCE = new Consumer();
+	private static final Map<String, Integer> COUNTER = new HashMap<>();
+	private static int  ZK_COUNER_MAX = 5;
 	
-	private Map<Broker, Consumer> consumers = new HashMap<Broker, Consumer>();
+//	private Map<Broker, Consumer> consumers = new HashMap<Broker, Consumer>();
 	private Lock lock = new ReentrantLock(true);
 	private Set<ConsumerSubscriber> subscribers = new HashSet<ConsumerSubscriber>();
 	private Set<String> topics = new HashSet<String>();
+	public ZkClient zkClient = null;
+	private int zkCounter = 0;
+
+	NettyClient client = new NettyClient();
 	private ConsumerRunnable consumerRunnableThread;
 	
 	private Consumer(){}
@@ -49,17 +58,17 @@ public class Consumer extends NettyClient {
 	}
 	
 	public void loadClusterFromZK(ServerConfig config){
-		initZkClient(config);
+		client.initZkClient(config);
+		zkClient = client.zkClient;
 	}
 	
 	public void connect(ServerConfig config) throws ConnectException{
 		if(config.getEnableZookeeper()){
-			INSTANCE.loadClusterFromZK(config);
-			INSTANCE.zkClient.subscribeChildChanges(ServerRegister.ZK_BROKER_GROUP, new ZkChildListener(){
+			loadClusterFromZK(config);
+			client.zkClient.subscribeChildChanges(ServerRegister.ZK_BROKER_GROUP, new ZkChildListener(){
 				@Override
 				public void handleChildChange(String parentPath, List<String> currentChildren) throws Exception {
-					ZkUtils.getCustomerCluster(zkClient, INSTANCE.topics.toArray(new String[0]));
-					consumers.clear();
+					ZkUtils.getCustomerCluster(client.zkClient, INSTANCE.topics.toArray(new String[0]));
 				}
 			});
 		}
@@ -68,53 +77,55 @@ public class Consumer extends NettyClient {
 				topics.add(topic);
 			}
 		}
+		ZK_COUNER_MAX = config.getZKDataPersistenceInterval()/2;
+		zkCounter = ZK_COUNER_MAX;
 	}
 	
 	public boolean reConnect(){
-		if(!connected){
-			ZkUtils.getCustomerCluster(INSTANCE.zkClient, INSTANCE.topics.toArray(new String[0]));
-			Map<Broker, List<String>>  ipWithTopics = Cluster.getCustomerServerByQueues(INSTANCE.topics.toArray(new String[0]));
-			if(null != ipWithTopics){
-				for(Entry<Broker, List<String>> entry:ipWithTopics.entrySet()){
-					if(!consumers.containsKey(entry.getKey())){
+		if(!client.connected){
+			if(client != null && client.zkClient != null){
+				if(INSTANCE.zkCounter >= ZK_COUNER_MAX){
+					ZkUtils.getCustomerCluster(client.zkClient, topics.toArray(new String[0]));
+					client.stop();
+					client = new NettyClient();
+					client.zkClient = zkClient;
+					INSTANCE.zkCounter = 0;
+				}
+				Map<Broker, List<String>>  ipWithTopics = Cluster.getCustomerServerByQueues(topics.toArray(new String[0]));
+				if(null != ipWithTopics){
+					Broker[] brokers = ipWithTopics.keySet().toArray(new Broker[0]);
+					if(brokers != null && brokers.length > 0){
 						try {
-							Consumer consumer = new Consumer();
-							consumer.open(entry.getKey().getHost(), entry.getKey().getPort());
-							consumers.put(entry.getKey(), consumer);
-							connected = true;
+							client.open(brokers[0].getHost(), brokers[0].getPort());
+						} catch (IllegalStateException e) {
+							client.connected = false;
+							INSTANCE.zkCounter++;
+							LOGGER.error(String.format("consumer %s:%d error：", brokers[0].getHost(), brokers[0].getPort()));
 						} catch (Exception e) {
-							LOGGER.error(String.format("connect %s:%d error：", entry.getKey(), entry.getKey().getPort()));
+							client.connected = false;
+							LOGGER.error(String.format("consumer %s:%d error：", brokers[0].getHost(), brokers[0].getPort()));
 						}
 					}
+					int last = (int) (System.currentTimeMillis()%10);
+					if(last > 5){
+						INSTANCE.zkCounter++;
+					}
+				}else{
+					INSTANCE.zkCounter++;
 				}
-				
 			}
 		}
-		return connected;
+		return client.connected;
 	}
 	
 	public static void fetch(){
 		if(INSTANCE.topics.size() > 0){
 			if(INSTANCE.reConnect()){
-				Map<Broker, List<String>>  ipWithTopics = Cluster.getCustomerServerByQueues(INSTANCE.topics.toArray(new String[0]));
-				if(null != ipWithTopics && ipWithTopics.size() > 0){
-					for(Entry<Broker, List<String>> entry:ipWithTopics.entrySet()){
-						try {
-							Consumer consumer = INSTANCE.consumers.get(entry.getKey());
-							if(consumer != null){
-								consumer.fetch(entry.getValue());
-							}else{
-								INSTANCE.connected = false;
-								INSTANCE.consumers.clear();
-							}
-						} catch (Exception e) {
-							INSTANCE.connected = false;
-							INSTANCE.consumers.clear();
-							LOGGER.error(e.getMessage(), e);
-						}
-					}
-				}else{
-					INSTANCE.connected = false;//没有相应的topic
+				try {
+					INSTANCE.fetch(INSTANCE.topics.toArray(new String[0]));
+				} catch (Exception e) {
+					INSTANCE.client.connected = false;
+					LOGGER.error(e.getMessage(), e);
 				}
 			}
 		}
@@ -137,7 +148,7 @@ public class Consumer extends NettyClient {
 			request.setReqHandlerType(RequestHandler.FETCH);
 			request.setBody(DataUtils.serialize(topicList));
 			try {
-				Message response = write(request);
+				Message response = client.write(request);
 				if (response.getType() == TransferType.EXCEPTION.value) {
 					// 有异常
 					LOGGER.error("Cuonsumer fetch message error");
@@ -158,11 +169,33 @@ public class Consumer extends NettyClient {
 				lock.lock();
 				try {
 					for(Topic topic : rtTopics){
-						for (ConsumerSubscriber subscriber : INSTANCE.subscribers) {
-							if(subscriber.subscribeToTopic() != null && subscriber.subscribeToTopic().contains(topic.getTopic())){
-								subscriber.notify(topic);
+						if(COUNTER.containsKey(topic.getTopic())){
+							if(topic.getReadCounter() > COUNTER.get(topic.getTopic())){
+								for (ConsumerSubscriber subscriber : INSTANCE.subscribers) {
+									if(subscriber.subscribeToTopic() != null && subscriber.subscribeToTopic().contains(topic.getTopic())){
+										subscriber.notify(topic);
+									}
+								}
+								COUNTER.put(topic.getTopic(), topic.getReadCounter());
+							}else if(topic.getReadCounter() < 0){
+								for (ConsumerSubscriber subscriber : INSTANCE.subscribers) {
+									if(subscriber.subscribeToTopic() != null && subscriber.subscribeToTopic().contains(topic.getTopic())){
+										subscriber.notify(topic);
+									}
+								}
+								COUNTER.put(topic.getTopic(), topic.getReadCounter());
+							}else{
+								LOGGER.info("Has been spending, " + topic.toString());
 							}
+						}else{
+							for (ConsumerSubscriber subscriber : INSTANCE.subscribers) {
+								if(subscriber.subscribeToTopic() != null && subscriber.subscribeToTopic().contains(topic.getTopic())){
+									subscriber.notify(topic);
+								}
+							}
+							COUNTER.put(topic.getTopic(), topic.getReadCounter());
 						}
+						
 					}
 				} finally {
 					lock.unlock();
@@ -170,6 +203,10 @@ public class Consumer extends NettyClient {
 			}
 		}
 		return rtTopics;
+	}
+	
+	public void stop() {
+		client.stop();
 	}
 	
 	public static void addSubscriber(ConsumerSubscriber subscriber){
@@ -200,12 +237,27 @@ public class Consumer extends NettyClient {
 		}
 	}
 	
-	public static void runningConsumerRunnable(ServerConfig config) throws ConnectException{
-		if (INSTANCE.consumerRunnableThread != null) {
-			INSTANCE.consumerRunnableThread.close();
+	public static void runningConsumerRunnable(String path) throws ConnectException{
+		File mainFile = null;
+		try {
+			URL url = new URL(path);
+			mainFile = new File(url.getFile()).getCanonicalFile();
+		} catch (IOException e) {
+			e.printStackTrace();
 		}
-		INSTANCE.consumerRunnableThread = new ConsumerRunnable(config);
-		INSTANCE.consumerRunnableThread.start();
+		if (!mainFile.isFile() || !mainFile.exists()) {
+            System.err.println(String.format("ERROR: Main config file not exist => '%s', copy one from 'conf/server.properties.sample' first.", mainFile.getAbsolutePath()));
+            System.exit(2);
+        }
+		ServerConfig serverConfig = new ServerConfig(mainFile);
+		runningConsumerRunnable(serverConfig);
+	}
+	
+	public static void runningConsumerRunnable(ServerConfig config) throws ConnectException{
+		if(INSTANCE.consumerRunnableThread == null){
+			INSTANCE.consumerRunnableThread = new ConsumerRunnable(config);
+			INSTANCE.consumerRunnableThread.start();
+		}
 	}
 
 	

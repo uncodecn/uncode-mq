@@ -1,6 +1,5 @@
 package cn.uncode.mq.server.backup;
 
-import java.net.ConnectException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -11,20 +10,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import cn.uncode.mq.client.NettyClient;
-import cn.uncode.mq.cluster.Cluster;
 import cn.uncode.mq.config.ServerConfig;
+import cn.uncode.mq.exception.SendRequestException;
+import cn.uncode.mq.exception.TimeoutException;
 import cn.uncode.mq.network.Backup;
-import cn.uncode.mq.network.BackupResult;
 import cn.uncode.mq.network.Message;
 import cn.uncode.mq.network.Topic;
 import cn.uncode.mq.network.TransferType;
 import cn.uncode.mq.server.RequestHandler;
-import cn.uncode.mq.server.ServerRegister;
 import cn.uncode.mq.util.DataUtils;
 import cn.uncode.mq.util.Scheduler;
-import cn.uncode.mq.util.ZkUtils;
-import cn.uncode.mq.zk.ZkChildListener;
-import cn.uncode.mq.zk.ZkClient;
 
 /**
  * 
@@ -34,20 +29,13 @@ import cn.uncode.mq.zk.ZkClient;
 public class EmbeddedConsumer{
 	
 	private static final EmbeddedConsumer INSTANCE = new EmbeddedConsumer();
-	
-    /**
-     * 日志拉取时间间隔(单位:秒)
-     */
-    private static final int REPLICA_FETJ_INTERVAL = 5;
     
-
     private static final Logger LOGGER = LoggerFactory.getLogger(EmbeddedConsumer.class);
     
-    private final Scheduler scheduler = new Scheduler(1, "uncode-mq-server-producer-", false);
+    private final Scheduler scheduler = new Scheduler(1, "uncode-mq-embedded-consumer-", false);
     String replicaHost;
 	int port;
-	ZkClient zkClient;
-    ReplicaConsumer replicaConsumer;
+	NettyClient replicaConsumer;
     Set<String> topics = new HashSet<String>();
     
 	
@@ -58,25 +46,17 @@ public class EmbeddedConsumer{
 		return INSTANCE;
     }
     
-    public void start(ServerConfig config, ZkClient zkClient) {
+    public void start(ServerConfig config) {
+    	replicaConsumer = new NettyClient();
     	replicaHost = config.getReplicaHost();
     	port = config.getPort();
-    	this.zkClient = zkClient;
     	if(StringUtils.isNotBlank(replicaHost)){
-    		replicaConsumer = new ReplicaConsumer(replicaHost, port, zkClient);
+    		replicaConsumer = new NettyClient();
     		if (this.scheduler != null) {
-        		LOGGER.debug("starting topic producer " + 3000 + " ms");
-                this.scheduler.scheduleWithRate(new ReplicaConsumerRunnable(), 30 * 1000, REPLICA_FETJ_INTERVAL * 1000L);
+                this.scheduler.scheduleWithRate(new ReplicaConsumerRunnable(), 30 * 1000, config.getReplicaFetchInterval() * 1000L);
             }
         	LOGGER.info("Embedded consumer started, replica host:" + replicaHost.toString());
     	}
-//    	zkClient.subscribeChildChanges(ServerRegister.ZK_BROKER_GROUP, new ZkChildListener(){
-//			@Override
-//			public void handleChildChange(String parentPath, List<String> currentChildren) throws Exception {
-//				ZkUtils.getCustomerCluster(zkClient, INSTANCE.topics.toArray(new String[0]));
-//			}
-//		});
-    	
     }
 
 	public void stop(){
@@ -84,53 +64,35 @@ public class EmbeddedConsumer{
 		this.scheduler.shutdown();
 	}
 	
-	class ReplicaConsumer extends NettyClient{
-		
-		final String host;
-		final int port;
-		final ZkClient zkClient;
-		
-		public ReplicaConsumer(String host, int port, ZkClient zkClient){
-			this.host = host;
-			this.port = port;
-			this.zkClient = zkClient;
-		}
-		
-		@Override
-		public void connect(ServerConfig config) throws ConnectException {
-			//nothing
-		}
-
-		@Override
-		public boolean reConnect() {
-			try {
-				if(!connected){
-					this.open(host, port);
-					connected = true;
-				}
-			} catch (Exception e) {
-				connected = false;
-				this.stop();
-			}
-			return connected;
-		}
-	}
-
 	class ReplicaConsumerRunnable implements Runnable {
 		
-		int connectError = 0;
+		int connectError = 2;
 	    
 	    @Override
 	    public void run() {
-	    	if(connectError > 4){
-	    		replicaConsumer = new ReplicaConsumer(replicaHost, port, zkClient);
+	    	if(connectError > 2){
+	    		if(INSTANCE.replicaConsumer != null){
+	    			INSTANCE.replicaConsumer.stop();
+	    		}
+	    		INSTANCE.replicaConsumer = new NettyClient();
 	    		connectError = 0;
 	    	}
-			if(replicaConsumer.reConnect()){
+	    	
+    		if(!INSTANCE.replicaConsumer.connected){
+    			try {
+    				INSTANCE.replicaConsumer.open(INSTANCE.replicaHost, INSTANCE.port);
+    			} catch (IllegalStateException e) {
+    				connectError++;
+    				LOGGER.error("Embedded consumer connection error.", e);
+    			} catch (TimeoutException e) {
+    				LOGGER.error("Embedded consumer connection error.", e);
+    			} catch (Exception e) {
+    				LOGGER.error("Embedded consumer connection error.", e);
+    			}
+			}else{
 				Message request = Message.newRequestMessage();
 				request.setReqHandlerType(RequestHandler.REPLICA);
-				ZkUtils.loadEmbeddedCustomerCluster(replicaConsumer.zkClient, replicaConsumer.host);
-				Set<String> queues = Cluster.getQueuesByServerHost(replicaConsumer.host);
+				Set<String> queues = BackupQueuePool.getBackupQueueNameFromDisk();
 				if(queues != null){
 					List<Backup> backups = new ArrayList<Backup>();
 					for(String queue:queues){
@@ -140,30 +102,35 @@ public class EmbeddedConsumer{
 						int wCounter = backupQueue.getWriteIndex().getWriteCounter();
 						backups.add(new Backup(queue, wNum, wPosition, wCounter));
 					}
-						request.setBody(DataUtils.serialize(backups));
-					try {
-						Message response = replicaConsumer.write(request);
-						if (response.getType() == TransferType.EXCEPTION.value) {
-						} else {
-							if(response.getBody() != null){
-								List<Topic> backupResult = (List<Topic>) DataUtils.deserialize(response.getBody());
-								if(backupResult != null && backupResult.size() > 0){
-									for(Topic topic:backupResult){
-										BackupQueue backupQueue = BackupQueuePool.getBackupQueueFromPool(topic.getTopic());
-										backupQueue.offer(DataUtils.serialize(topic));
-									}
+					request.setBody(DataUtils.serialize(backups));
+				}
+				
+				try {
+					Message response = INSTANCE.replicaConsumer.write(request);
+					if (response.getType() == TransferType.EXCEPTION.value) {
+					} else {
+						if(response.getBody() != null){
+							List<Topic> backupResult = (List<Topic>) DataUtils.deserialize(response.getBody());
+							if(backupResult != null && backupResult.size() > 0){
+								for(Topic topic:backupResult){
+									BackupQueue backupQueue = BackupQueuePool.getBackupQueueFromPool(topic.getTopic());
+									backupQueue.offer(DataUtils.serialize(topic));
 								}
 							}
 						}
-						LOGGER.info("Fetch topic from master broker, size:"+response.getBody().length);
-					} catch (Exception e) {
-						replicaConsumer.setConnected(false);
-						LOGGER.error("Embedded consumer flush topic error.", e);
 					}
+					if(response.getBody().length > 0){
+						LOGGER.info("Fetch topic from master broker, size:"+response.getBody().length);
+					}
+				} catch (SendRequestException e) {
+					INSTANCE.replicaConsumer.setConnected(false);
+					LOGGER.error("Embedded consumer flush topic error.", e);
+				}catch (Exception e) {
+					INSTANCE.replicaConsumer.setConnected(false);
+					connectError++;
+					LOGGER.error("Embedded consumer flush topic error.", e);
 				}
 				
-			}else{
-				connectError++;
 			}
 
 	    }

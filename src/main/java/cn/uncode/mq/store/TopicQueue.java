@@ -7,6 +7,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import cn.uncode.mq.network.Message;
 import cn.uncode.mq.store.disk.DiskAndZkTopicQueueIndex;
@@ -16,19 +18,18 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 
 public class TopicQueue extends AbstractQueue<byte[]> {
+	
+	private static final Logger LOGGER = LoggerFactory.getLogger(TopicQueue.class);
 
 	private String queueName;
     private String fileDir;
     private TopicQueueIndex index;
     private TopicQueueBlock readBlock;
+    private TopicQueueBlock replicaBlock;
     private TopicQueueBlock writeBlock;
     private ReentrantLock readLock;
     private ReentrantLock writeLock;
     private AtomicInteger size;
-    
-    private TopicQueueBlock replicaBlock;
-    private int replicaNum;
-    private int replicaPosition;
     
     
     public TopicQueue(String queueName, String fileDir, boolean backup) {
@@ -54,6 +55,10 @@ public class TopicQueue extends AbstractQueue<byte[]> {
         	this.readBlock = new TopicQueueBlock(index, TopicQueueBlock.formatBlockFilePath(queueName,
                 index.getReadNum(), fileDir));
         }
+    }
+    
+    public TopicQueueIndex getReadIndex(){
+    	return index;
     }
 
     @Override
@@ -164,32 +169,19 @@ public class TopicQueue extends AbstractQueue<byte[]> {
     public byte[] replicaRead(int readNum, int readPosition) {
     	if(this.replicaBlock == null){
     		this.replicaBlock = new TopicQueueBlock(null, TopicQueueBlock.formatBlockFilePath(queueName, readNum, fileDir));
-    		this.replicaNum = readNum;
-    		this.replicaPosition = readPosition;
     	}
     	String fname = this.replicaBlock.getBlockFilePath();
     	String[] names = fname.split("_");
     	if(StringUtils.isNotBlank(names[2])){
     		String numStr = names[2].substring(0, names[2].indexOf("."));
-    		int num = Integer.valueOf(numStr);
-    		if(num < readNum){
+    		if(!StringUtils.equals(numStr, readNum+"")){
+    			this.replicaBlock.close();
     			this.replicaBlock = new TopicQueueBlock(null, TopicQueueBlock.formatBlockFilePath(queueName, readNum, fileDir));
-    			this.replicaNum = readNum;
-    			this.replicaPosition = readPosition;
     		}
     	}
         readLock.lock();
         try {
-        	if (replicaBlock.eof(this.replicaPosition)) {
-        		this.replicaNum = this.replicaNum + 1;
-        		this.replicaNum = (this.replicaNum < 0) ? 0 : this.replicaNum;
-                this.replicaBlock = new TopicQueueBlock(null, TopicQueueBlock.formatBlockFilePath(queueName, this.replicaNum, fileDir));
-                this.replicaPosition = 0;
-        	}
-        	byte[] bytes = replicaBlock.read(this.replicaPosition);
-        	if(null != bytes){
-        		this.replicaPosition += bytes.length + 4;
-        	}
+            byte[] bytes = replicaBlock.read(readPosition);
             return bytes;
         } finally {
             readLock.unlock();
@@ -202,7 +194,11 @@ public class TopicQueue extends AbstractQueue<byte[]> {
     }
 
     public void sync() {
-        index.sync();
+    	try {
+    		index.sync();
+		} catch (Exception e) {
+			LOGGER.error("sync to zk error", e);
+		}
         // read block只读，不用同步
         writeBlock.sync();
     }

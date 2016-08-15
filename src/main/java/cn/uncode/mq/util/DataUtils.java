@@ -1,5 +1,7 @@
 package cn.uncode.mq.util;
 
+import io.netty.buffer.ByteBuf;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
@@ -12,6 +14,11 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.zip.CRC32;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import cn.uncode.mq.cluster.Group;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonDeserializationContext;
@@ -22,10 +29,8 @@ import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
 
-import cn.uncode.mq.cluster.Group;
-import io.netty.buffer.ByteBuf;
-
 public class DataUtils {
+	private static final Logger LOGGER = LoggerFactory.getLogger(DataUtils.class);
 	
 	public static byte[] serialize(Object object) {
 		ObjectOutputStream oos = null;
@@ -131,4 +136,17 @@ public class DataUtils {
 		return GSON.fromJson(json, Group.class);
 	}
 
+	public static void printStackTrace() {
+		LOGGER.info("printStackTrace run");
+		try{
+	        StackTraceElement[] stackElements = new Throwable().getStackTrace();
+	        if(stackElements != null) {
+	            for(int i = 0, leng=stackElements.length; i < leng && i<200; i++) {
+	            	LOGGER.info(""+ stackElements[i]); 
+	            }
+	        }
+		}finally{
+			
+		}
+    }
 }

@@ -747,8 +747,8 @@ public class ZkClient implements Watcher, Closeable {
 
             LOG.debug("Awaiting connection to Zookeeper server: " + maxMsToWaitUntilConnected);
             if (!waitUntilConnected(maxMsToWaitUntilConnected, TimeUnit.MILLISECONDS)) {
-                throw new ZkTimeoutException(String.format(
-                        "Unable to connect to zookeeper server[%s] within timeout %dms", _connection.getServers(), maxMsToWaitUntilConnected));
+            	LOG.error(String.format("Unable to connect to zookeeper server[%s] within timeout %dms", _connection.getServers(), maxMsToWaitUntilConnected));
+                //throw new ZkTimeoutException(String.format("Unable to connect to zookeeper server[%s] within timeout %dms", _connection.getServers(), maxMsToWaitUntilConnected));
             }
             started = true;
         } catch (InterruptedException e) {

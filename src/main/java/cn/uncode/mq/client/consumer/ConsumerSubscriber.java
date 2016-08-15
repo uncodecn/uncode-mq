@@ -9,14 +9,14 @@ public interface ConsumerSubscriber {
 
 	/**
 	 * 订阅的主题
-	 * @return
+	 * @return 主题列表
 	 */
 	List<String> subscribeToTopic();
 	
 	
 	/**
 	 * 通知
-	 * @param topics
+	 * @param topic 主题
 	 */
 	void notify(Topic topic);
 

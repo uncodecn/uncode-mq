@@ -29,9 +29,9 @@ public class ProducerRequestHandler implements RequestHandler {
 					TopicQueuePool.getQueueOrCreate(topic.getTopic()).offer(DataUtils.serialize(topic));
 //					EmbeddedConsumer.getInstance().push(topic);
 				}
-				LOGGER.info("Producer request handler, message:"+topics.toString());
+				LOGGER.info("Producer request handler, receive message:"+topics.toString());
 			}else{
-				LOGGER.info("Producer request handler, message is null.");
+				LOGGER.info("Producer request handler, receive message is null.");
 			}
 		}
 		Message response = Message.newResponseMessage();

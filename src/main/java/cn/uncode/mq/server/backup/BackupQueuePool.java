@@ -1,23 +1,28 @@
 package cn.uncode.mq.server.backup;
 
+import static cn.uncode.mq.store.TopicQueuePool.DATA_BACKUP_PATH;
+import static cn.uncode.mq.store.TopicQueuePool.DEFAULT_DATA_PATH;
 import static cn.uncode.mq.store.TopicQueuePool.INDEX_FILE_SUFFIX;
 
 import java.io.File;
 import java.io.FilenameFilter;
+import java.io.RandomAccessFile;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.uncode.mq.config.ServerConfig;
 import cn.uncode.mq.store.TopicQueuePool;
+import cn.uncode.mq.store.disk.DiskAndZkTopicQueueIndex;
+import cn.uncode.mq.util.Scheduler;
 import cn.uncode.mq.zk.ZkClient;
 
 public class BackupQueuePool {
@@ -27,14 +32,17 @@ public class BackupQueuePool {
 	
 	private static final BlockingQueue<String> DELETING_QUEUE = new LinkedBlockingQueue<>();
     private static BackupQueuePool INSTANCE = null;
-    private final String filePath;
+    private String filePath;
     private Map<String, BackupQueue> backupQueueMap;
-    private ScheduledExecutorService syncService;
+    private final Scheduler scheduler = new Scheduler(1, "uncode-mq-backup-queue-", false);
     private final ZkClient zkClient;
 
-    private BackupQueuePool(ZkClient zkClient, String filePath) {
+    private BackupQueuePool(ZkClient zkClient, ServerConfig config) {
     	this.zkClient = zkClient;
-    	this.filePath = filePath;
+    	this.filePath = DEFAULT_DATA_PATH + DATA_BACKUP_PATH;
+        if(StringUtils.isNotBlank(config.getDataDir())){
+        	this.filePath = config.getDataDir() + DATA_BACKUP_PATH;
+    	}
         File fileDir = new File(this.filePath);
 		if (!fileDir.exists()) {
 			fileDir.mkdirs();
@@ -43,8 +51,7 @@ public class BackupQueuePool {
             throw new IllegalArgumentException(fileDir.getAbsolutePath() + " is not a readable log directory.");
         }
         this.backupQueueMap = scanDir(fileDir);
-        this.syncService = Executors.newSingleThreadScheduledExecutor();
-        this.syncService.scheduleWithFixedDelay(new Runnable() {
+        this.scheduler.scheduleWithRate(new Runnable() {
             @Override
             public void run() {
                 for (BackupQueue queue : backupQueueMap.values()) {
@@ -52,7 +59,7 @@ public class BackupQueuePool {
                 }
                 //deleteBlockFile(); 暂不作删除操作
             }
-        }, 10L, 10L, TimeUnit.SECONDS);
+        }, 1000L, 4000L);
     }
 
     private void deleteBlockFile() {
@@ -98,18 +105,18 @@ public class BackupQueuePool {
         return exitsFQueues;
     }
     
-    public synchronized static void startup(String dataPath) {
-        startup(null, dataPath);
+    public synchronized static void startup(ServerConfig config) {
+        startup(null, config);
     }
 
-    public synchronized static void startup(ZkClient zkClient, String dataPath) {
+    public synchronized static void startup(ZkClient zkClient, ServerConfig config) {
         if (INSTANCE == null) {
-            INSTANCE = new BackupQueuePool(zkClient, dataPath);
+            INSTANCE = new BackupQueuePool(zkClient, config);
         }
     }
 
     private void disposal() {
-        this.syncService.shutdown();
+        this.scheduler.shutdown();
         for (BackupQueue queue : backupQueueMap.values()) {
         	queue.close();
         }
@@ -143,8 +150,62 @@ public class BackupQueuePool {
         String fileName = indexFileName.substring(0, indexFileName.lastIndexOf('.'));
         return fileName.split("_")[1];
     }
+    
+    public static Set<String> getBackupQueueNameFromDisk(){
+    	Set<String> names = null;
+		File fileDir = new File(INSTANCE.filePath);
+		if (fileDir.exists() && fileDir.isDirectory() && fileDir.canRead()) {
+			File[] indexFiles = fileDir.listFiles(new FilenameFilter() {
+	            @Override
+	            public boolean accept(File dir, String name) {
+	            	return name.startsWith("tindex") && name.endsWith(TopicQueuePool.INDEX_FILE_SUFFIX);
+	            }
+	        });
+	        if (ArrayUtils.isNotEmpty(indexFiles)) {
+	        	names = new HashSet<String>();
+	            for (File indexFile : indexFiles) {
+	            	String[] nas = indexFile.getName().split("_");
+	            	if(nas != null && nas.length > 1){
+	            		names.add(nas[1].replace(INDEX_FILE_SUFFIX, ""));
+	            	}
+	            }
+	        }
+		}
+    	return names;
+    }
 	
 		
+    public static void main(String[] args){
+		try {
+			String indexFilePath = DiskAndZkTopicQueueIndex.formatIndexFilePath("test", DEFAULT_DATA_PATH+DATA_BACKUP_PATH);
+	        File file = new File(indexFilePath);
+	        String ms = "slave:";
+            if (file.exists()) {
+            	RandomAccessFile indexf = new RandomAccessFile(file, "rw");
+                byte[] bytes = new byte[8];
+                indexf.read(bytes, 0, 8);
+                String MAGIC = "umqv.1.0";
+                StringBuilder sb  = new StringBuilder(ms);
+                if (!MAGIC.equals(new String(bytes))) {
+                    
+                }else{
+                	sb.append(MAGIC).append("=>").append("readNum:").append(indexf.readInt())
+        			.append(",readPosition:").append(indexf.readInt())
+        			.append(",readCounter:").append(indexf.readInt())
+        			.append(",writeNum:").append(indexf.readInt())
+        			.append(",writePosition:").append(indexf.readInt())
+        			.append(",writeCounter:").append(indexf.readInt());
+                }
+                System.out.println(sb.toString());
+            }else{
+            	 System.out.println(ms);
+            }
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 		
+		
+    }	
 	
 }
+

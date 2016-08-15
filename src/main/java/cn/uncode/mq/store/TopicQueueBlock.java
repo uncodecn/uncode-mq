@@ -15,13 +15,14 @@ import org.slf4j.LoggerFactory;
 
 import cn.uncode.mq.store.TopicQueueIndex;
 import cn.uncode.mq.util.Cleaner;
+import cn.uncode.mq.util.DataUtils;
 
 public class TopicQueueBlock {
 	
 	private final Logger LOGGER = LoggerFactory.getLogger(TopicQueueBlock.class);
 	
 	public static final String BLOCK_FILE_SUFFIX = ".umq";//数据文件
-	public static final int BLOCK_SIZE = 1 * 1024 * 1024;//32MB
+	public static final int BLOCK_SIZE = 32 * 1024 * 1024;//32MB
 	
 	public static final int EOF = -1;
 	
@@ -40,11 +41,14 @@ public class TopicQueueBlock {
         this.fileChannel = fileChannel;
         this.byteBuffer = byteBuffer;
         this.mappedBlock = mappedBlock;
+        DataUtils.printStackTrace();
     }
 
     public TopicQueueBlock(TopicQueueIndex index, String blockFilePath) {
         this.index = index;
         this.blockFilePath = blockFilePath;
+
+        DataUtils.printStackTrace();
         try {
             File file = new File(blockFilePath);
             this.blockFile = new RandomAccessFile(file, "rw");
@@ -116,10 +120,6 @@ public class TopicQueueBlock {
         index.putReadPosition(readPosition + bytes.length + 4);
         index.putReadCounter(index.getReadCounter() + 1);
         return bytes;
-    }
-    
-    public boolean eof(int readPosition) {
-        return readPosition > 0 && byteBuffer.getInt(readPosition) == EOF;
     }
     
     public byte[] read(int readPosition) {

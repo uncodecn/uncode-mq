@@ -4,7 +4,6 @@ package cn.uncode.mq.server;
 import static  cn.uncode.mq.util.ZkUtils.ZK_MQ_BASE;
 
 import java.io.Closeable;
-import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +14,6 @@ import cn.uncode.mq.config.ServerConfig;
 import cn.uncode.mq.exception.ZkNodeExistsException;
 import cn.uncode.mq.util.DataUtils;
 import cn.uncode.mq.util.ZkUtils;
-import cn.uncode.mq.zk.ZkChildListener;
 import cn.uncode.mq.zk.ZkClient;
 
 /**
@@ -41,10 +39,13 @@ public class ServerRegister implements Closeable {
     public ZkClient startup(ServerConfig config) {
     	LOGGER.info("connecting to zookeeper: " + config.getZkConnect());
     	this.config = config;
-    	String authString = config.getZkUsername() + ":"+ config.getZkPassword();
-        zkClient = new ZkClient(config.getZkConnect(), authString, config.getZkSessionTimeoutMs(),
-                config.getZkConnectionTimeoutMs());
+    	if(zkClient == null){
+    		String authString = config.getZkUsername() + ":"+ config.getZkPassword();
+            zkClient = new ZkClient(config.getZkConnect(), authString, config.getZkSessionTimeoutMs(),
+                    config.getZkConnectionTimeoutMs());
+    	}
         registerBrokerGroupInZk();
+        ZkUtils.getCluster(zkClient);
         return zkClient;
     }
 
@@ -65,9 +66,11 @@ public class ServerRegister implements Closeable {
         zkPath += "/" + brokerGroup.getName();
         String jsonGroup = DataUtils.brokerGroup2Json(brokerGroup);
         try {
-//        	ZkUtils.getCluster(zkClient);
-            ZkUtils.createEphemeralPathExpectConflict(zkClient, zkPath, jsonGroup);
-            Cluster.setMaster(brokerGroup);//暂存，index中使用
+        	ZkUtils.getCluster(zkClient);
+        	if(!Cluster.getMasterIps().contains(config.getHost())){
+                ZkUtils.createEphemeralPathExpectConflict(zkClient, zkPath, jsonGroup);
+                Cluster.setCurrent(brokerGroup);//暂存，index中使用
+        	}
         } catch (ZkNodeExistsException e) {
             String oldServerInfo = ZkUtils.readDataMaybeNull(zkClient, zkPath);
             String message = "A broker (%s) is already registered on the path %s." //
