@@ -11,3 +11,5 @@
 .idea/
 target/
 /bin/
+release/
+/release/
